@@ -1,0 +1,7 @@
+{
+    "pylint.args": [
+        "--disable=E1101"
+    ],
+    "python.analysis.diagnosticMode": "workspace",
+    "python.analysis.autoImportCompletions": true
+}
