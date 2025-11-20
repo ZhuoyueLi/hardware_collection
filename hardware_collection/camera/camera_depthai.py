@@ -19,16 +19,15 @@ class DepthAICamera(AbstractCamera):
     def __init__(
         self,
         device_id,
+        port: int,
         name=None,
         height=512,
         width=512,
-        start_frame_latency=0,
         camera_type: DAICameraType = DAICameraType.OAK_D_LITE,
-        **kwargs,
     ):
         self.camera_type = camera_type
         self.device_id = device_id
-        super().__init__(address="tcp://*:5555", name=name, height=height, width=width, **kwargs)
+        super().__init__(address=f"tcp://*:{port}")
         self.initialize()
 
     def initialize(self) -> None:
@@ -43,7 +42,7 @@ class DepthAICamera(AbstractCamera):
             depthai_cam, board_socket, resolution = (
                 dai.node.ColorCamera,
                 dai.CameraBoardSocket.CAM_C,
-                dai.ColorCameraProperties.SensorResolution.THE_800_P,
+                dai.ColorCameraProperties.SensorResolution.THE_1080_P,
             )
         else:
             raise ValueError("Unsupported DepthAI camera type.")
@@ -78,7 +77,7 @@ class DepthAICamera(AbstractCamera):
                 timestamp=time.time(),
                 frame_id=0,
             ),
-            image_bytes=frame.tobytes(),
+            image_data=frame,
         )
         return frame
 

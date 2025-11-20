@@ -4,6 +4,8 @@ import time
 import struct
 from typing import ClassVar, List
 from dataclasses import dataclass, field
+import cv2
+import numpy as np
 
 from ..core.abstract_hardware import AbstractHardware
 
@@ -76,9 +78,10 @@ class CameraHeader:
 
 
 class CameraFrame:
-    def __init__(self, header: CameraHeader, image_bytes: bytes):
+    def __init__(self, header: CameraHeader, image_data: cv2.Mat):
         self.header = header
-        self.image_bytes = image_bytes
+        self.image_data = image_data
+        self.image_bytes = image_data.tobytes()
 
     def to_bytes(self) -> List[bytes]:
         return [self.header.to_bytes(), self.image_bytes]
@@ -88,22 +91,24 @@ class CameraFrame:
         header_size = struct.calcsize(CameraHeader.STRUCT_FORMAT)
         header = CameraHeader.from_bytes(data[:header_size])
         image_bytes = data[header_size:]
-        return CameraFrame(header, image_bytes)
+        image_data = cv2.imdecode(np.frombuffer(image_bytes, np.uint8), cv2.IMREAD_COLOR)
+        return CameraFrame(header, image_data)
 
 
 class AbstractCamera(AbstractHardware):
     """Camera hardware component."""
 
-    def __init__(self, address: str):
+    def __init__(self, address: str, show_preview: bool = False) -> None:
         """Initialize the camera hardware component.
 
         Args:
             address (str): The address to connect the ZeroMQ socket to.
+            show_preview (bool): Whether to show a preview of the captured images.
         """
         super().__init__(address=address)
         self.width = None
         self.height = None
-
+        self.show_preview = show_preview
 
     @abc.abstractmethod
     def initialize(self) -> None:
@@ -117,6 +122,11 @@ class AbstractCamera(AbstractHardware):
         """
         frame = self.capture_image()
         self.pub_socket.send_multipart(frame.to_bytes())
+        if self.show_preview:
+            img_array = np.frombuffer(frame.image_bytes, dtype=np.uint8)
+            img = img_array.reshape((frame.header.height, frame.header.width, frame.header.channels))
+            cv2.imshow("Camera Preview", img)
+            cv2.waitKey(1)
 
     @abc.abstractmethod
     def capture_image(self) -> CameraFrame:
