@@ -117,8 +117,9 @@ class ZED(AbstractCamera):
             raise RuntimeError(f"Failed to grab frame from ZED camera {self.device_id}")
 
         timestamp = time.time()
-        self.zed.retrieve_image(self.image, self.sl.VIEW.LEFT)
-        rgb = self.image.get_data()[:, :, :3]  # Remove alpha channel if present
+        self.zed.retrieve_image(self.image, self.sl.VIEW.LEFT)#bgra
+        bgr = self.image.get_data()[:, :, :3]  # Remove alpha channel if present
+        rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
 
         self.zed.retrieve_measure(self.depth, self._sl.MEASURE.DEPTH)
         self.latest_depth = self.depth.get_data().copy()
