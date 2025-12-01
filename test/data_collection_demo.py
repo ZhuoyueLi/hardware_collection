@@ -437,7 +437,7 @@ def main(cfg: DictConfig):
         robot=robot,
         data_dir=Path(cfg.data_dir),
         camera_streams=camera_streams,
-        capture_interval=cfg.get("capture_interval", 0.0),
+        capture_interval=cfg.get("capture_interval", 0.001),
     )
     data_collection_manager.start_key_listener()
 

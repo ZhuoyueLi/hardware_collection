@@ -27,7 +27,6 @@ class ZED(AbstractCamera):
     def __init__(
         self,
         device_id: str,
-        port: int,
         *,# use keyword-only arguments after this
         name: Optional[str] = None,
         height: int = 720,
@@ -35,7 +34,7 @@ class ZED(AbstractCamera):
         fps: int = 30,
         depth_mode: str = "PERFORMANCE",
         show_preview: bool = False,
-        publish_address: Optional[str] = None,
+        publish_address: str = "tcp://*:6000",
     ) -> None:
         self.device_id = str(device_id)
         self.name = name or f"ZED_{self.device_id}"
@@ -48,7 +47,7 @@ class ZED(AbstractCamera):
         self.depth = None
         self.latest_depth: Optional[np.ndarray] = None
         self.frame_id = 0
-        self.publish_address = publish_address or f"tcp://*:{port}"
+        self.publish_address = publish_address
         super().__init__(publish_address=self.publish_address, show_preview=show_preview)
         self.width = width
         self.height = height
@@ -195,10 +194,11 @@ class ZED(AbstractCamera):
         for idx, device in enumerate(cam_list):
             if amount != -1 and idx >= amount:
                 break
+            publish_address = f"tcp://*:{start_port + idx}"
             devices.append(
                 ZED(
                     device_id=device.serial_number,
-                    port=start_port + idx,
+                    publish_address=publish_address,
                     height=height,
                     width=width,
                     **kwargs,
@@ -208,7 +208,7 @@ class ZED(AbstractCamera):
 
 
 if __name__ == "__main__":
-    camera = ZED(device_id="30414018", port=7878)
+    camera = ZED(device_id="30414018", publish_address="tcp://*:7777")
     try:
         for _ in range(10):
             frame = camera.capture_image()
