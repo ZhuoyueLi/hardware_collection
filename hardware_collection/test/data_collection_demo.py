@@ -185,10 +185,11 @@ class CollectionData:
 class RemoteCameraStream:
     """Subscribe to camera frames via ZeroLanCom."""
 
-    def __init__(self, name: str, topic: str, recv_timeout_ms: int = 1000) -> None:
+    def __init__(self, name: str, topic: str, recv_timeout_ms: int = 1000, capture_interval: float = 0.0) -> None:
         self.name = name
         self.topic = topic
         self.recv_timeout_ms = recv_timeout_ms
+        self.capture_interval = capture_interval  # Capture interval in seconds (0 = every frame)
         self.latest_frame: Optional[CameraFrame] = None
 
     def connect(self) -> None:
@@ -262,6 +263,7 @@ class DataCollectionManager:
         self.camera_timestamps: List[list[float]] = []
         self.camera_metadata_list: List[list[dict]] = []  # Store metadata dicts for each camera
         self.camera_frame_idx = [0] * len(self.camera_streams)
+        self.camera_last_capture_times: List[float] = [0.0] * len(self.camera_streams)  # Track last capture time for each camera
         self.timestamps = []
         self.cur_timestep = 0
         self.capture_interval = capture_interval
@@ -345,6 +347,7 @@ class DataCollectionManager:
         self.camera_timestamps = [[] for _ in self.camera_streams]
         self.camera_metadata_list = [[] for _ in self.camera_streams]  # Reset metadata list for all cameras
         self.camera_frame_idx = [0] * len(self.camera_streams)  # Reset frame index for all cameras
+        self.camera_last_capture_times = [time.time()] * len(self.camera_streams)  # Initialize capture times
 
     def __camera_identifier(self, camera: RemoteCameraStream, idx: int) -> str:
         candidate = camera.name or camera.address or f"camera_{idx}"
@@ -360,11 +363,20 @@ class DataCollectionManager:
         if not self.camera_streams:
             return
         
+        cur_time = time.time()
         for idx, stream in enumerate(self.camera_streams):
+            # Check if it's time to capture for this camera based on its capture_interval
+            if stream.capture_interval > 0 and (cur_time - self.camera_last_capture_times[idx]) < stream.capture_interval:
+                continue
+            
             camera_dir = self.camera_dirs[idx]
             frame = stream.receive_latest_frame()
             if frame is None:
                 continue
+            
+            # Update last capture time for this camera
+            self.camera_last_capture_times[idx] = cur_time
+            
             frame_idx = self.camera_frame_idx[idx]
             self.camera_frame_idx[idx] += 1
 
@@ -536,11 +548,13 @@ def main(cfg: DictConfig):
                 print(f"Camera '{name}' is missing a 'topic' entry in the config, skipping.")
                 continue
             recv_timeout = cam_cfg.get("recv_timeout_ms", 1000)
+            capture_interval = cam_cfg.get("capture_interval", 0.0)  # Default: capture every frame
             camera_streams.append(
                 RemoteCameraStream(
                     name=name,
                     topic=topic,
                     recv_timeout_ms=recv_timeout,
+                    capture_interval=capture_interval,
                 )
             )
 
