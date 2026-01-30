@@ -37,6 +37,8 @@ class ZED(AbstractCamera):
         depth_mode: str = "PERFORMANCE",
         show_preview: bool = False,
         publish_topic: str = "zed_camera",
+        node_name: Optional[str] = None,
+        node_ip: Optional[str] = None,
     ) -> None:
         self.device_id = str(device_id)
         self.name = name or f"ZED_{self.device_id}"
@@ -50,7 +52,8 @@ class ZED(AbstractCamera):
         self.latest_depth: Optional[np.ndarray] = None
         self.frame_id = 0
         self.publish_topic = publish_topic
-        super().__init__(publish_topic=self.publish_topic, show_preview=show_preview)
+        super().__init__(publish_topic=self.publish_topic, show_preview=show_preview,
+                         node_name=node_name, node_ip=node_ip)
         self.width = width
         self.height = height
         self.initialize()

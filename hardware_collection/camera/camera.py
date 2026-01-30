@@ -234,15 +234,18 @@ class AbstractCamera(AbstractHardware):
     """Camera hardware component."""
 
     def __init__(self, publish_topic: str, show_preview: bool = False, 
-                 camera_name: Optional[str] = None) -> None:
+                 camera_name: Optional[str] = None,
+                 node_name: str = None, node_ip: str = None) -> None:
         """Initialize the camera hardware component.
 
         Args:
             publish_topic (str): Topic name to publish frame data via ZeroLanCom.
             show_preview (bool): Whether to show a preview of the captured images.
             camera_name (str, optional): Name of the camera for metadata tracking.
+            node_name (str, optional): Node name for pyzlc.init.
+            node_ip (str, optional): Node IP for pyzlc.init.
         """
-        super().__init__(publish_topic=publish_topic)
+        super().__init__(publish_topic=publish_topic, node_name=node_name, node_ip=node_ip)
         self.width = None
         self.height = None
         self.show_preview = show_preview

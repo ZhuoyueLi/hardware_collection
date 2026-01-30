@@ -7,15 +7,15 @@ import pyzlc
 
 # Add hardware directory to path to import GelloAgent
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
-from hardware.gello_zlc import GelloAgent
+from hardware_node.gello_ import GelloAgent
 
 from franka_control_client.franka_robot.franka_arm import (
     ControlMode,
     RemoteFranka,
 )
-from franka_control_client.franka_robot.franka_gripper import (
-    RemoteFrankaGripper,
-)
+# from franka_control_client.franka_robot.franka_gripper import (
+#     RemoteFrankaGripper,
+# )
 
 if __name__ == "__main__":
     # Initialize Gello agent

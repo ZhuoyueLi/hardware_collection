@@ -79,8 +79,9 @@ def _Connect_cam():
         if field not in camera_config:
             raise ValueError(f"Missing required field '{field}' in the YAML configuration")
 
-    pyzlc.init(camera_config["publish_topic"], "192.168.0.109")
-    print(f"ZED Publisher initialized on topic: {camera_config['publish_topic']}")
+    node_name = camera_config.get("node_name", camera_config["publish_topic"])
+    node_ip = camera_config.get("node_ip", "192.168.0.109")
+    
     # Initialize the ZED camera with the configuration
     camera = ZEDCamera(
         device_id=str(camera_config["device_id"]),
@@ -90,6 +91,8 @@ def _Connect_cam():
         depth_mode=str(camera_config["depth_mode"]),
         show_preview=bool(camera_config["show_preview"]),
         publish_topic=camera_config["publish_topic"],
+        node_name=node_name,
+        node_ip=node_ip,
     )
 
     frames_sent = 0
@@ -97,6 +100,7 @@ def _Connect_cam():
     log_interval = int(camera_config["log_interval"])
     
     try:
+        pyzlc.info(f"[ZEDCamNode] Camera node '{node_name}' started on {node_ip}")
         while True:
             camera.publish_image()
             frames_sent += 1
