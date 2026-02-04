@@ -5,11 +5,10 @@ from __future__ import annotations
 import argparse
 import logging
 import signal
-import sys
 import time
 from pathlib import Path
 import threading
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 import yaml
 
@@ -45,9 +44,11 @@ def load_config(path: str) -> Dict[str, Any]:
     return data
 
 
-def resolve_config(args: argparse.Namespace) -> Dict[str, Any]:
+def _merge_camera_config(
+    root_cfg: Dict[str, Any],
+    camera_cfg: Dict[str, Any],
+) -> Dict[str, Any]:
     defaults = {
-        "publish_topic": None,
         "width": 1280,
         "height": 720,
         "fps": 30,
@@ -55,69 +56,134 @@ def resolve_config(args: argparse.Namespace) -> Dict[str, Any]:
         "show_preview": False,
         "log_interval": 60,
     }
-
-    file_cfg = load_config(args.config)
-    merged = {**defaults, **file_cfg}
-
-    if not merged.get("publish_topic"):
-        raise ValueError("publish_topic must be provided in the YAML configuration")
-    if "device_id" not in merged or not merged["device_id"]:
-        raise ValueError("ZED device_id must be provided in the YAML configuration")
-
+    merged = {**defaults, **root_cfg, **camera_cfg}
     return merged
 
-def _Connect_cam():
-    args = parse_args()
-    logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 
-    # Load the camera configuration from the YAML file
-    camera_config = load_config(args.config)
+def _resolve_camera_configs(root_cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
+    if "camera_configs" not in root_cfg:
+        # Legacy single-camera config.
+        return [_merge_camera_config({}, root_cfg)]
 
-    # Validate required fields in the YAML configuration
-    required_fields = ["device_id", "depth_mode", "publish_topic", "width", "height", "fps", "show_preview", "log_interval"]
+    config_dir = Path(root_cfg.get("zed_config_dir", ""))
+    camera_files = root_cfg.get("camera_configs") or []
+    if not camera_files:
+        raise ValueError("camera_configs must be a non-empty list in zed_publisher.yaml")
+
+    camera_cfgs: List[Dict[str, Any]] = []
+    for filename in camera_files:
+        cfg_path = config_dir / filename
+        camera_cfg = load_config(str(cfg_path))
+        camera_cfgs.append(_merge_camera_config(root_cfg, camera_cfg))
+    return camera_cfgs
+
+
+def _validate_camera_config(cfg: Dict[str, Any]) -> None:
+    required_fields = [
+        "device_id",
+        "publish_topic",
+        "width",
+        "height",
+        "fps",
+        "depth_mode",
+        "show_preview",
+        "log_interval",
+        "zlc_config",
+    ]
     for field in required_fields:
-        if field not in camera_config:
+        if field not in cfg or cfg[field] in (None, ""):
             raise ValueError(f"Missing required field '{field}' in the YAML configuration")
 
-    node_name = camera_config.get("node_name", camera_config["publish_topic"])
-    node_ip = camera_config.get("node_ip", "192.168.0.109")
-    
-    # Initialize the ZED camera with the configuration
-    camera = ZEDCamera(
-        device_id=str(camera_config["device_id"]),
-        height=int(camera_config["height"]),
-        width=int(camera_config["width"]),
-        fps=int(camera_config["fps"]),
-        depth_mode=str(camera_config["depth_mode"]),
-        show_preview=bool(camera_config["show_preview"]),
-        publish_topic=camera_config["publish_topic"],
-        node_name=node_name,
-        node_ip=node_ip,
-    )
 
+def _camera_loop(
+    camera: ZEDCamera,
+    log_interval: int,
+    stop_event: threading.Event,
+) -> None:
     frames_sent = 0
     last_report_time = time.time()
-    log_interval = int(camera_config["log_interval"])
-    
     try:
-        pyzlc.info(f"[ZEDCamNode] Camera node '{node_name}' started on {node_ip}")
-        while True:
-            camera.publish_image()
+        while not stop_event.is_set():
+            camera.publish_frame()
             frames_sent += 1
 
             now = time.time()
             if now - last_report_time >= log_interval:
                 elapsed = now - last_report_time
                 fps = frames_sent / elapsed if elapsed > 0 else 0.0
-                logger.info("Published %d frames (%.2f FPS)", frames_sent, fps)
+                logger.info(
+                    "[%s] Published %d frames (%.2f FPS)",
+                    camera.device_name,
+                    frames_sent,
+                    fps,
+                )
                 frames_sent = 0
                 last_report_time = now
+    except Exception as exc:  # pragma: no cover - runtime feedback only
+        logger.error("[%s] Camera loop stopped: %s", camera.device_name, exc)
+        stop_event.set()
+
+
+def main() -> int:
+    args = parse_args()
+    logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
+
+    root_cfg = load_config(args.config)
+    camera_cfgs = _resolve_camera_configs(root_cfg)
+
+    cameras: List[ZEDCamera] = []
+    threads: List[threading.Thread] = []
+    stop_event = threading.Event()
+
+    for cfg in camera_cfgs:
+        _validate_camera_config(cfg)
+        cameras.append(
+            ZEDCamera(
+                device_id=str(cfg["device_id"]),
+                height=int(cfg["height"]),
+                width=int(cfg["width"]),
+                fps=int(cfg["fps"]),
+                depth_mode=str(cfg["depth_mode"]),
+                show_preview=bool(cfg["show_preview"]),
+                publish_topic=cfg["publish_topic"],
+                zlc_config=str(cfg["zlc_config"]),
+            )
+        )
+
+    def _shutdown_handler(signum, _frame):
+        logger.info("Received signal %s, shutting down...", signum)
+        stop_event.set()
+
+    signal.signal(signal.SIGINT, _shutdown_handler)
+    signal.signal(signal.SIGTERM, _shutdown_handler)
+
+    try:
+        pyzlc.info("[ZEDCamNode] Camera publisher started")
+        for camera, cfg in zip(cameras, camera_cfgs):
+            thread = threading.Thread(
+                target=_camera_loop,
+                args=(camera, int(cfg["log_interval"]), stop_event),
+                daemon=True,
+            )
+            threads.append(thread)
+            thread.start()
+
+        for thread in threads:
+            thread.join()
     except Exception as exc:  # pragma: no cover - runtime feedback only
         logger.error("Publisher stopped due to error: %s", exc)
         return 1
     finally:
-        logger.info("close camera")
-        camera.close()
+        stop_event.set()
+        for thread in threads:
+            if thread.is_alive():
+                thread.join(timeout=2.0)
+        for camera in cameras:
+            camera.close()
+        logger.info("All cameras closed.")
+
+    return 0
+
 
 if __name__ == "__main__":
-    _Connect_cam()
+    raise SystemExit(main())

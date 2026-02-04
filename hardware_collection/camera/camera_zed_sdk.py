@@ -1,14 +1,15 @@
-﻿from __future__ import annotations
+from __future__ import annotations
+
 import logging
 import time
-from typing import List, Optional
 from pathlib import Path
-import yaml
+from typing import List, Optional
 
 import cv2
 import numpy as np
+import yaml
 
-from .camera import AbstractCamera, CameraFrame, CameraHeader
+from .camera import AbstractCamera, CameraFrame
 
 
 logger = logging.getLogger(__name__)
@@ -29,33 +30,41 @@ class ZED(AbstractCamera):
     def __init__(
         self,
         device_id: str,
-        *,# use keyword-only arguments after this
+        *,  # use keyword-only arguments after this
+        device_name: Optional[str] = None,
+        publish_topic: Optional[str] = None,
         name: Optional[str] = None,
         height: int = 720,
         width: int = 1280,
         fps: int = 30,
         depth_mode: str = "PERFORMANCE",
         show_preview: bool = False,
-        publish_topic: str = "zed_camera",
-        node_name: Optional[str] = None,
-        node_ip: Optional[str] = None,
+        zlc_config: Optional[str] = None,
     ) -> None:
         self.device_id = str(device_id)
         self.name = name or f"ZED_{self.device_id}"
         self.fps = fps
         self.depth_mode = depth_mode.upper()
+        self.depth_enabled = self.depth_mode != "NONE"
         self._sl = None
         self.zed = None
         self.runtime_parameters = None
         self.image = None
         self.depth = None
         self.latest_depth: Optional[np.ndarray] = None
-        self.frame_id = 0
-        self.publish_topic = publish_topic
-        super().__init__(publish_topic=self.publish_topic, show_preview=show_preview,
-                         node_name=node_name, node_ip=node_ip)
-        self.width = width
-        self.height = height
+
+        resolved_device_name = device_name or publish_topic or f"zed_{self.device_id}"
+        if not zlc_config:
+            raise ValueError("zlc_config is required to initialize ZeroLanCom.")
+
+        super().__init__(
+            device_name=resolved_device_name,
+            width=width,
+            height=height,
+            show_preview=show_preview,
+            depth=self.depth_enabled,
+            zlc_config=zlc_config,
+        )
         self.initialize()
 
     @staticmethod
@@ -120,7 +129,7 @@ class ZED(AbstractCamera):
         depth_mode = self.depth_mode if self.depth_mode in self._DEPTH_MODES else "PERFORMANCE"
         return getattr(self._sl.DEPTH_MODE, depth_mode)
 
-    def capture_image(self) -> CameraFrame:
+    def capture_frame(self) -> CameraFrame:
         if self.zed is None or self.runtime_parameters is None:
             raise RuntimeError(f"Not connected to ZED camera {self.device_id}")
 
@@ -132,25 +141,27 @@ class ZED(AbstractCamera):
         bgr = self.image.get_data()[:, :, :3]  # Remove alpha channel if present
         rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
 
-        # Convert BGR to RGB for preview
-        if self.show_preview:
-            preview_bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
-            cv2.imshow("ZED Preview", preview_bgr)
-            cv2.waitKey(1)
+        depth_bytes = None
+        if self.depth_enabled:
+            self.zed.retrieve_measure(self.depth, self._sl.MEASURE.DEPTH)
+            depth_arr = self.depth.get_data().copy()
+            self.latest_depth = depth_arr
+            depth_bytes = depth_arr.astype(np.float32, copy=False).tobytes()
 
-        self.zed.retrieve_measure(self.depth, self._sl.MEASURE.DEPTH)
-        self.latest_depth = self.depth.get_data().copy()
+        return {
+            "timestamp": timestamp,
+            "width": int(rgb.shape[1]),
+            "height": int(rgb.shape[0]),
+            "channels": int(rgb.shape[2]),
+            "rgb_data": rgb.tobytes(),
+            "depth_data": depth_bytes,
+        }
 
-        header = CameraHeader(
-            width=rgb.shape[1],
-            height=rgb.shape[0],
-            channels=rgb.shape[2],
-            timestamp=timestamp,
-            frame_id=self.frame_id,
-        )
-        self.frame_id += 1
+    def capture_image(self) -> CameraFrame:
+        return self.capture_frame()
 
-        return CameraFrame(header=header, image_data=rgb)
+    def publish_image(self) -> None:
+        self.publish_frame()
 
     def get_camera_information(self) -> dict:
         if self.zed is None:
@@ -171,11 +182,34 @@ class ZED(AbstractCamera):
     def get_latest_depth(self) -> Optional[np.ndarray]:
         return None if self.latest_depth is None else self.latest_depth.copy()
 
+    def show_preview_rgbd(self, frame: CameraFrame) -> None:
+        if frame["depth_data"] is None:
+            self.show_preview_rgb(frame)
+            return
+
+        rgb = np.frombuffer(frame["rgb_data"], dtype=np.uint8).reshape(
+            (frame["height"], frame["width"], frame["channels"])
+        )
+        depth = np.frombuffer(frame["depth_data"], dtype=np.float32).reshape(
+            (frame["height"], frame["width"])
+        )
+
+        depth_vis = np.nan_to_num(depth, nan=0.0, posinf=0.0, neginf=0.0)
+        nonzero = depth_vis[depth_vis > 0]
+        max_val = float(np.percentile(nonzero, 95)) if nonzero.size else 1.0
+        max_val = max(max_val, 1e-6)
+        depth_vis = np.clip(depth_vis, 0.0, max_val)
+        depth_vis = (depth_vis / max_val * 255.0).astype(np.uint8)
+        depth_color = cv2.applyColorMap(depth_vis, cv2.COLORMAP_TURBO)
+
+        cv2.imshow(f"{self.device_name} RGB", cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
+        cv2.imshow(f"{self.device_name} Depth", depth_color)
+        cv2.waitKey(1)
+
     def close(self) -> None:
         if self.zed is not None:
             self.zed.close()
             self.zed = None
-        self.close_sockets()
         print(f"ZED camera {self.device_id} closed.")
 
     @staticmethod
@@ -186,6 +220,7 @@ class ZED(AbstractCamera):
         topic_prefix: str = "zed",
         height: int = 720,
         width: int = 1280,
+        zlc_config: Optional[str] = None,
         **kwargs,
     ) -> List["ZED"]:
         """
@@ -230,6 +265,7 @@ class ZED(AbstractCamera):
                     publish_topic=topic,
                     height=height,
                     width=width,
+                    zlc_config=zlc_config,
                     **kwargs,
                 )
             )
@@ -263,12 +299,19 @@ class ZED(AbstractCamera):
 
 
 if __name__ == "__main__":
-    camera = ZED(device_id="30414018", publish_topic="zed_camera")
+    camera = ZED(
+        device_id="30414018",
+        publish_topic="zed_camera",
+        zlc_config="configs/zed_zlc.yaml",
+    )
     try:
         for _ in range(10):
-            frame = camera.capture_image()
+            frame = camera.capture_frame()
             logger.info(
-                "Captured frame %s with shape %s", frame.header.frame_id, frame.image_data.shape
+                "Captured frame ts=%s size=%sx%s",
+                frame["timestamp"],
+                frame["width"],
+                frame["height"],
             )
     finally:
         camera.close()

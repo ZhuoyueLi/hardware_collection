@@ -5,7 +5,7 @@ import enum
 from typing import List
 import cv2
 
-from .camera import AbstractCamera, CameraFrame, CameraHeader
+from .camera_old import AbstractCamera, CameraFrame, CameraHeader
 
 class DAICameraType(enum.Enum):
     OAK_D = 0

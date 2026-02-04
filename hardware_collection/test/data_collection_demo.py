@@ -15,7 +15,7 @@ import pyzlc
 import torch
 from omegaconf import DictConfig
 
-from hardware_collection.camera.camera import CameraFrame, CameraHeader, FrameMetadata
+from hardware_collection.camera.camera_old import CameraFrame, CameraHeader, FrameMetadata
 from utils.keyboard_input import NonBlockingKeyPress
 
 
