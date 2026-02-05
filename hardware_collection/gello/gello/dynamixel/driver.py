@@ -1,13 +1,13 @@
-from threading import Lock, Thread, Event
-from typing import Sequence
 import time
-import numpy as np
+from threading import Event, Lock, Thread
+from typing import Protocol, Sequence
 
-from dynamixel_sdk.group_sync_read import GroupSyncRead
-from dynamixel_sdk.group_sync_write import GroupSyncWrite
-from dynamixel_sdk.packet_handler import PacketHandler
-from dynamixel_sdk.port_handler import PortHandler
-from dynamixel_sdk.robotis_def import (
+import numpy as np
+from hardware_collection.gello.third_party.DynamixelSDK.python.src.dynamixel_sdk.group_sync_read import GroupSyncRead
+from hardware_collection.gello.third_party.DynamixelSDK.python.src.dynamixel_sdk.group_sync_write import GroupSyncWrite
+from hardware_collection.gello.third_party.DynamixelSDK.python.src.dynamixel_sdk.packet_handler import PacketHandler
+from hardware_collection.gello.third_party.DynamixelSDK.python.src.dynamixel_sdk.port_handler import PortHandler
+from hardware_collection.gello.third_party.DynamixelSDK.python.src.dynamixel_sdk.robotis_def import (
     COMM_SUCCESS,
     DXL_HIBYTE,
     DXL_HIWORD,
@@ -15,8 +15,82 @@ from dynamixel_sdk.robotis_def import (
     DXL_LOWORD,
 )
 
+# Constants
+ADDR_TORQUE_ENABLE = 64
+ADDR_GOAL_POSITION = 116
+LEN_GOAL_POSITION = 4
+ADDR_PRESENT_POSITION = 132
+LEN_PRESENT_POSITION = 4
+TORQUE_ENABLE = 1
+TORQUE_DISABLE = 0
 
-class DynamixelDriver:
+
+class DynamixelDriverProtocol(Protocol):
+    def set_joints(self, joint_angles: Sequence[float]):
+        """Set the joint angles for the Dynamixel servos.
+
+        Args:
+            joint_angles (Sequence[float]): A list of joint angles.
+        """
+        ...
+
+    def torque_enabled(self) -> bool:
+        """Check if torque is enabled for the Dynamixel servos.
+
+        Returns:
+            bool: True if torque is enabled, False if it is disabled.
+        """
+        ...
+
+    def set_torque_mode(self, enable: bool):
+        """Set the torque mode for the Dynamixel servos.
+
+        Args:
+            enable (bool): True to enable torque, False to disable.
+        """
+        ...
+
+    def get_joints(self) -> np.ndarray:
+        """Get the current joint angles in radians.
+
+        Returns:
+            np.ndarray: An array of joint angles.
+        """
+        ...
+
+    def close(self):
+        """Close the driver."""
+
+
+class FakeDynamixelDriver(DynamixelDriverProtocol):
+    def __init__(self, ids: Sequence[int]):
+        self._ids = ids
+        self._joint_angles = np.zeros(len(ids), dtype=int)
+        self._torque_enabled = False
+
+    def set_joints(self, joint_angles: Sequence[float]):
+        if len(joint_angles) != len(self._ids):
+            raise ValueError(
+                "The length of joint_angles must match the number of servos"
+            )
+        if not self._torque_enabled:
+            raise RuntimeError("Torque must be enabled to set joint angles")
+        self._joint_angles = np.array(joint_angles)
+
+    def torque_enabled(self) -> bool:
+        return self._torque_enabled
+
+    def set_torque_mode(self, enable: bool):
+        self._torque_enabled = enable
+
+    def get_joints(self) -> np.ndarray:
+        return self._joint_angles.copy()
+
+    def close(self):
+        pass
+
+
+class DynamixelDriver(DynamixelDriverProtocol):
     def __init__(
         self, ids: Sequence[int], port: str = "/dev/ttyUSB0", baudrate: int = 57600
     ):

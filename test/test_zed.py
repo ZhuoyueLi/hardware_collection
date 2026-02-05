@@ -9,6 +9,7 @@ Usage:
 
 Note: Requires ZED SDK + pyzed installed and an actual camera connected.
 """
+## todo: reconstruct with new apstruct
 import argparse
 import sys
 import time
