@@ -7,4 +7,4 @@ height: 376 #720
 fps: 30
 show_preview: false
 log_interval: 10
-zlc_config: hardware_collection/zed_config/zlc_config_template.yaml
+zlc_config: hardware_collection/zed_config/zlc_config.yaml

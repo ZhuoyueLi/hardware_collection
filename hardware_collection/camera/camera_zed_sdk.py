@@ -160,9 +160,6 @@ class ZED(AbstractCamera):
     def capture_image(self) -> CameraFrame:
         return self.capture_frame()
 
-    def publish_image(self) -> None:
-        self.publish_frame()
-
     def get_camera_information(self) -> dict:
         if self.zed is None:
             raise RuntimeError("Camera not connected")
