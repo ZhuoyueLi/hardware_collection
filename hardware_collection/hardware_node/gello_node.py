@@ -1,91 +1,65 @@
-from __future__ import annotations
-
 import threading
 from dataclasses import dataclass
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import numpy as np
 import pyzlc
 import tyro
-#need to install gello in the environment
-from gello.agents.gello_agent import GelloAgent
 
-from ..core.abstract_hardware import AbstractHardware
+from hardware_collection.gello.gello.agents.gello_agent import GelloAgent
+
+from hardware_collection.core.abstract_hardware import AbstractHardware
 
 
 @dataclass
 class Args:
     node_name: str = "gello"
-    ip: str = "127.0.0.2"
+    ip: str = "192.168.0.109"
     hardware_port: str = "/dev/serial/by-id/usb-FTDI_USB__-__Serial_Converter_FT94EVRT-if00-port0" #check the actual config
     state_pub_rate_hz: int = 1000
-    publish_state: bool = True
 
 
-class ZlcGelloNode(AbstractHardware):
+class ZlcGelloNode:
    
-    def __init__(self, name: str, agent: GelloAgent, state_pub_rate_hz: int = 50,
-                 publish_state: bool = True, node_ip: str = "127.0.0.2"):
-        super().__init__(f"{name}/gello_state", node_name=name, node_ip=node_ip)
+    def __init__(self, name: str, agent: GelloAgent, state_pub_rate_hz: int = 50,):
         self._name = name
         self._agent = agent
-        self._publish_state = publish_state
-        self._state_dt_ms = int(1000 / max(1, state_pub_rate_hz))
+        self._state_dt_s = int(1 / max(1, state_pub_rate_hz))
         self._stop_event = threading.Event()
-        self._state_thread: threading.Thread | None = None
+        self._state_thread: Optional[threading.Thread] = None
 
         self._arm_state_pub = pyzlc.Publisher(f"{name}/gello_arm_state")
+        pyzlc.info(f"[GelloNode] Initialized publishers for '{name}'/gello_arm_state")
         self._gripper_state_pub = pyzlc.Publisher(f"{name}/gello_gripper_state")
-        self.initialize()
-        if self._publish_state:
-            self._state_thread = threading.Thread(target=self._state_publish_loop,
-                                                  daemon=True)
-            self._state_thread.start()
-
+        pyzlc.info(f"[GelloNode] Initialized publishers for '{name}'/gello_gripper_state")
     def _build_arm_state(self) -> Dict[str, List[float]]:
         joints_arr = np.asarray(self._agent._robot.get_joint_state()[:-1], dtype=float).reshape(-1)
         return {"joint_state": joints_arr.tolist()}
 
-    def _build_gripper_state(self) -> Dict[str, float | int]:
+    def _build_gripper_state(self) -> Dict[str, float]:
         gripper = float(np.asarray(self._agent._robot.get_joint_state()[-1], dtype=float))
         return {"gripper": gripper}
 
-    def initialize(self) -> None:
-        """Initialize the Gello hardware component."""
-        pyzlc.info(f"[GelloNode] Initializing hardware on port {self._agent}")
-
-
-    def _state_publish_loop(self):
-        pyzlc.info(f"[GelloNode] State publish thread started ({1000 // self._state_dt_ms} Hz)")
-        while not self._stop_event.is_set():
-            arm_state = self._build_arm_state()
-            gripper_state = self._build_gripper_state()
-            self._arm_state_pub.publish(arm_state)
-            self._gripper_state_pub.publish(gripper_state)
-            pyzlc.sleep(self._state_dt_ms)
-        pyzlc.info("[GelloNode] State publish thread stopped")
-
-    def stop(self):
-        self._stop_event.set()
-        if self._state_thread and self._state_thread.is_alive():
-            self._state_thread.join()
-        self.close_sockets()
-
-
 def main():
     args = tyro.cli(Args)
+    pyzlc.init(args.node_name, args.ip, group_name="DroidGroup")
     agent = GelloAgent(port=args.hardware_port)
-    node = ZlcGelloNode(args.node_name, agent,
-                        state_pub_rate_hz=args.state_pub_rate_hz,
-                        publish_state=args.publish_state,
-                        node_ip=args.ip)
+    gello_node = ZlcGelloNode(args.node_name, agent,
+                        state_pub_rate_hz=args.state_pub_rate_hz)
+    pyzlc.info(f"[GelloNode] ZeroLanCom node '{args.node_name}' started on {args.ip}")
     try:
-        pyzlc.info(f"[GelloNode] ZeroLanCom node '{args.node_name}' started on {args.ip}")
-        pyzlc.spin()
-    except KeyboardInterrupt:
-        pyzlc.info("[GelloNode] Shutting down...")
+        while True:
+            arm_state = gello_node._build_arm_state()
+            gripper_state = gello_node._build_gripper_state()
+            gello_node._arm_state_pub.publish(arm_state)
+            gello_node._gripper_state_pub.publish(gripper_state)
+            pyzlc.sleep(gello_node._state_dt_s)
+    except Exception as exc:  # pragma: no cover - runtime feedback only
+        pyzlc.error("Publisher stopped due to error: %s", exc)
+        return 1
     finally:
-        node.stop()
+        pyzlc.info("Gello publisher exiting")
+        return 0
 
 
 if __name__ == "__main__":

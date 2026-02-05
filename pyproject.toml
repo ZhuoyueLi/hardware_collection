@@ -1,10 +1,14 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "hardware_collection"
 version = "0.1.0"
 authors = [
     {name = "Xinkai Jiang", email = "xinkai.jiang@kit.edu"}
 ]
-readme = "README.md"
+
 requires-python = ">=3.8"
 dependencies = [
     "pytest>=8.3.5",
@@ -16,3 +20,8 @@ dependencies = [
     "pyzed>=3.8.0",         # For ZED SDK integration
     "pyzlc"
 ]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["hardware_collection*"]
+exclude = ["configs*"]
