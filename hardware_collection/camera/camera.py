@@ -1,140 +1,88 @@
 from __future__ import annotations
 import abc
-import time
-import struct
-from typing import ClassVar, List
-from dataclasses import dataclass, field
+from typing import TypedDict, Optional
 import cv2
 import numpy as np
 
 from ..core.abstract_hardware import AbstractHardware
 
-
-@dataclass
-class CameraHeader:
-    """
-    Represents the metadata of a camera frame.
-    Uses `struct` to pack data into a compact, fixed-size binary format.
-
-    Binary Layout (little-endian "<"):
-        - width (I):     4 bytes, unsigned int
-        - height (I):    4 bytes, unsigned int
-        - channels (B):  1 byte, unsigned char
-        - timestamp (d): 8 bytes, double
-        - frame_id (Q):  8 bytes, unsigned long long
-
-    Total: 29 bytes (you can pad to 32 for alignment if needed).
-    """
-
-    STRUCT_FORMAT: ClassVar[str] = "<IIBdQ"  # Little-endian layout
-    STRUCT_SIZE: ClassVar[int] = struct.calcsize(STRUCT_FORMAT)
-
+class CameraFrame(TypedDict):
+    timestamp: float
     width: int
     height: int
     channels: int
-    timestamp: float = field(default_factory=time.time)
-    frame_id: int = 0
-
-    def to_bytes(self) -> bytes:
-        """
-        Serialize the header into a fixed-length byte sequence.
-
-        Returns:
-            bytes: Packed binary representation of the header.
-        """
-        return struct.pack(
-            self.STRUCT_FORMAT,
-            self.width,
-            self.height,
-            self.channels,
-            self.timestamp,
-            self.frame_id
-        )
-
-    @classmethod
-    def from_bytes(cls, data: bytes) -> "CameraHeader":
-        """
-        Deserialize bytes into a CameraHeader object.
-
-        Args:
-            data (bytes): The packed header bytes.
-
-        Returns:
-            CameraHeader: The reconstructed header.
-        """
-        width, height, channels, timestamp, frame_id = struct.unpack(
-            cls.STRUCT_FORMAT,
-            data[:cls.STRUCT_SIZE]
-        )
-        return cls(width, height, channels, timestamp, frame_id)
-
-    def __repr__(self) -> str:
-        """Return a readable string representation."""
-        return (
-            f"<CameraHeader "
-            f"{self.width}x{self.height}x{self.channels} "
-            f"id={self.frame_id} t={self.timestamp:.3f}>"
-        )
-
-
-class CameraFrame:
-    def __init__(self, header: CameraHeader, image_data: cv2.Mat):
-        self.header = header
-        self.image_data = image_data
-        self.image_bytes = image_data.tobytes()
-
-    def to_bytes(self) -> List[bytes]:
-        return [self.header.to_bytes(), self.image_bytes]
-
-    @staticmethod
-    def from_bytes(data: bytes):
-        header_size = struct.calcsize(CameraHeader.STRUCT_FORMAT)
-        header = CameraHeader.from_bytes(data[:header_size])
-        image_bytes = data[header_size:]
-        image_data = cv2.imdecode(np.frombuffer(image_bytes, np.uint8), cv2.IMREAD_COLOR)
-        return CameraFrame(header, image_data)
-
+    rgb_data: bytes
+    depth_data: Optional[bytes]
 
 class AbstractCamera(AbstractHardware):
     """Camera hardware component."""
 
-    def __init__(self, address: str, show_preview: bool = False) -> None:
+    def __init__(
+        self,
+        device_name: str,
+        width: int,
+        height: int,
+        show_preview: bool,
+        depth: bool,
+        zlc_config: str
+        ) -> None:
         """Initialize the camera hardware component.
 
         Args:
-            address (str): The address to connect the ZeroMQ socket to.
+            device_name (str): Topic name to publish frame data via ZeroLanCom.
             show_preview (bool): Whether to show a preview of the captured images.
         """
-        super().__init__(address=address)
-        self.width = None
-        self.height = None
+        super().__init__(device_name=device_name, config_path=zlc_config)
+        self.width = width
+        self.height = height
         self.show_preview = show_preview
+        self.depth = depth
+
 
     @abc.abstractmethod
     def initialize(self) -> None:
         raise NotImplementedError("Subclasses must implement initialize method.")
 
-    def publish_image(self, frame: CameraFrame) -> None:
-        """Publish the captured image frame over ZeroMQ.
+    def publish_frame(self) -> None:
+        """Publish the captured image frame over ZeroLanCom as binary data.
 
         Args:
             frame (CameraFrame): The captured image frame.
         """
-        frame = self.capture_image()
-        self.pub_socket.send_multipart(frame.to_bytes())
-        if self.show_preview:
-            img_array = np.frombuffer(frame.image_bytes, dtype=np.uint8)
-            img = img_array.reshape((frame.header.height, frame.header.width, frame.header.channels))
-            cv2.imshow("Camera Preview", img)
-            cv2.waitKey(1)
+        frame = self.capture_frame()
+        self.publisher.publish(frame)
+        if not self.show_preview:
+            return
+        if self.depth:
+            self.show_preview_rgbd(frame)
+        else:
+            self.show_preview_rgb(frame)
+
+
+    def show_preview_rgb(self, frame: CameraFrame) -> None:
+        """Show a preview of the RGB image frame using OpenCV.
+
+        Args:
+            frame (CameraFrame): The captured image frame.
+        """
+        rgb_array = np.frombuffer(frame["rgb_data"], dtype=np.uint8).reshape(
+            (frame["height"], frame["width"], frame["channels"])
+        )
+        cv2.imshow(f"{self.device_name} Preview", rgb_array)
+        cv2.waitKey(1)
+
+    # TODO: implement depth preview
+    def show_preview_rgbd(self, frame: CameraFrame) -> None:
+        raise NotImplementedError("Subclasses must implement show_preview_rgbd method.")
+
 
     @abc.abstractmethod
-    def capture_image(self) -> CameraFrame:
+    def capture_frame(self) -> CameraFrame:
         """Get sensor data from the camera.
 
         Returns:
             CameraFrame: The sensor data.
         """
-        raise NotImplementedError("Subclasses must implement capture_image method.")
+        raise NotImplementedError("Subclasses must implement capture_frame method.")
     
     
